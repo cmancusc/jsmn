@@ -5,7 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
-/* Function realloc_it() is a wrapper function for standard realloc()
+/* NOTE: Function realloc_it() is a wrapper function for standard realloc()
  * with one difference - it frees old memory pointer in case of realloc
  * failure. Thus, DO NOT use old data pointer in anyway after call to
  * realloc_it(). If your code has some kind of fallback algorithm if
@@ -20,7 +20,7 @@ static inline void *realloc_it(void *ptrmem, size_t size) {
   return p;
 }
 
-/*
+/* NOTE:
  * An example of reading JSON from stdin and printing its content to stdout.
  * The output looks like YAML, but I'm not sure if it's really compatible.
  */
@@ -69,66 +69,77 @@ static int dump(const char *js, jsmntok_t *t, size_t count, int indent) {
   return 0;
 }
 
-int main() {
-  int r;
+
+int main(int argc, char ** argv) {
+  if (argc != 2) {
+    printf("you should provide a json file\n");
+    return EXIT_FAILURE;
+  }
+  int rv;
   int eof_expected = 0;
-  char *js = NULL;
-  size_t jslen = 0;
-  char buf[BUFSIZ];
+  char * jsBuf = 0;
+  size_t buflen = 0;
 
   jsmn_parser p;
-  jsmntok_t *tok;
+  jsmntok_t *tok = 0;
   size_t tokcount = 2;
 
   /* Prepare parser */
   jsmn_init(&p);
 
   /* Allocate some tokens as a start */
-  tok = malloc(sizeof(*tok) * tokcount);
-  if (tok == NULL) {
-    fprintf(stderr, "malloc(): errno=%d\n", errno);
+  tok = (jsmntok_t*)malloc(sizeof(*tok) * tokcount);
+  if (!tok) {
+    fprintf(stderr, "malloc() tok: errno=%d\n", errno);
     return 3;
   }
 
-  for (;;) {
-    /* Read another chunk */
-    r = fread(buf, 1, sizeof(buf), stdin);
-    if (r < 0) {
-      fprintf(stderr, "fread(): %d, errno=%d\n", r, errno);
-      return 1;
-    }
-    if (r == 0) {
-      if (eof_expected != 0) {
-        return 0;
-      } else {
-        fprintf(stderr, "fread(): unexpected EOF\n");
-        return 2;
-      }
-    }
+  // NOTE: open json file provided by args
+  FILE * in_file = fopen(argv[1], "rb");
+  if (!in_file) {
+    fprintf(stderr, "cannot open file %s: errno=%d\n", argv[1], errno);
+    return EXIT_FAILURE;
+  }
+  fseek(in_file, 0, SEEK_END);
+  long int lenght = ftell(in_file);
+  if (lenght < 0) {
+    fprintf(stderr, "ftell(): errno=%d\n", errno);
+    return EXIT_FAILURE;
+  }
+  fseek(in_file, 0, SEEK_SET);
 
-    js = realloc_it(js, jslen + r + 1);
-    if (js == NULL) {
-      return 3;
-    }
-    strncpy(js + jslen, buf, r);
-    jslen = jslen + r;
-
-  again:
-    r = jsmn_parse(&p, js, jslen, tok, tokcount);
-    if (r < 0) {
-      if (r == JSMN_ERROR_NOMEM) {
-        tokcount = tokcount * 2;
-        tok = realloc_it(tok, sizeof(*tok) * tokcount);
-        if (tok == NULL) {
-          return 3;
-        }
-        goto again;
-      }
-    } else {
-      dump(js, tok, p.toknext, 0);
-      eof_expected = 1;
-    }
+  buflen = (size_t)lenght;
+  jsBuf = (char*)malloc(buflen);
+  if (!jsBuf) {
+    fprintf(stderr, "malloc() buff: errno=%d\n", errno);
+    return 3;
   }
 
+  /* Read data from file */
+  rv = fread(jsBuf, 1, buflen, in_file);
+  if (rv != buflen) {
+    fprintf(stderr, "fread(): %d, errno=%d\n", rv, errno);
+    return 1;
+  }
+
+again:
+  rv = jsmn_parse(&p, jsBuf, buflen, tok, tokcount);
+  if (rv < 0) {
+    if (rv == JSMN_ERROR_NOMEM) {
+      tokcount = tokcount * 2;
+      tok = (jsmntok_t*)realloc_it(tok, sizeof(*tok) * tokcount);
+      if (!tok) {
+        return 3;
+      }
+      goto again;
+    }
+  } else {
+    dump(jsBuf, tok, p.toknext, 0);
+    eof_expected = 1;
+  }
+
+  fclose(in_file);
+  free(jsBuf);
+  free(tok);
   return EXIT_SUCCESS;
 }
